@@ -42,6 +42,10 @@
 #' * `observe(value, ...)`: Records an observation of some number. Further
 #'   parameters are interpreted as labels. Available for histograms.
 #'
+#' * `time(expr, ...)`: Records an observation for the time elapsed evaluating
+#'   `expr`, in seconds. Further parameters are interpreted as labels.
+#'   Available for histograms.
+#'
 #' @examples
 #' meows <- counter_metric("meows", "Heard around the house.", cat = "Unknown")
 #' meows$inc(cat = "Shamus") # Count one meow from Shamus.
@@ -137,10 +141,10 @@ Metric <- R6::R6Class(
   private = list(
     name = NULL, help = NULL, type = NULL, labels = NULL, registry = NULL,
 
-    header = function() {
+    header = function(name = private$name) {
       sprintf(
-        "# HELP %s %s\n# TYPE %s %s", private$name, private$help,
-        private$name, private$type
+        "# HELP %s %s\n# TYPE %s %s", name, private$help, name,
+        private$type
       )
     }
   )
@@ -163,17 +167,28 @@ Counter <- R6::R6Class(
       }
     },
 
-    render = function() {
+    render = function(format = "openmetrics") {
+      # Compatibility with OpenMetrics requires that metric names include
+      # _total but help/type text do not. However, some existing tools will
+      # barf on this input, notably the Prometheus Pushgateway, so it must be
+      # possible to circumvent.
+      if (format == "openmetrics") {
+        name <- private$name
+        fmt <- "%s\n%s_total %s\n"
+        fmt_labels <- "%s_total{%s} %s"
+      } else {
+        name <- sprintf("%s_total", private$name)
+        fmt <- "%s\n%s %s\n"
+        fmt_labels <- "%s{%s} %s"
+      }
       if (is.null(private$labels)) {
-        sprintf(
-          "%s\n%s_total %s\n", private$header(), private$name, private$value
-        )
+        sprintf(fmt, private$header(name), name, private$value)
       } else {
         entries <- vapply(ls(private$value), function(key) {
-          sprintf("%s_total{%s} %s", private$name, key, private$value[[key]])
+          sprintf(fmt_labels, name, key, private$value[[key]])
         }, character(1))
         sprintf(
-          "%s\n%s\n", private$header(), paste(entries, collapse = "\n")
+          "%s\n%s\n", private$header(name), paste(entries, collapse = "\n")
         )
       }
     },
@@ -221,7 +236,7 @@ Gauge <- R6::R6Class(
       }
     },
 
-    render = function() {
+    render = function(format = "openmetrics") {
       if (is.null(private$labels)) {
         sprintf(
           "%s\n%s %s\n", private$header(), private$name, private$value
@@ -309,7 +324,7 @@ Histogram <- R6::R6Class(
       self$reset()
     },
 
-    render = function() {
+    render = function(format = "openmetrics") {
       if (is.null(private$labels)) {
         buckets <- paste0(
           private$name, "_bucket{le=\"", private$le, "\"} ", private$dist
@@ -366,6 +381,14 @@ Histogram <- R6::R6Class(
           private$sum[[key]] <- private$sum[[key]] + value
         }
       }
+    },
+
+    time = function(expr, ...) {
+      start <- Sys.time()
+      expr
+      elapsed <- unclass(difftime(Sys.time(), start, units = "secs"))
+      self$observe(elapsed, ...)
+      elapsed
     },
 
     reset = function() {

@@ -1,3 +1,16 @@
+# openmetrics 0.2.0
+
+* Add `push_to_gateway()` and `delete_from_gateway()` for manually pushing
+  metrics to a [Prometheus Pushgateway](https://prometheus.io/docs/instrumenting/pushing/)
+  instance.
+
+* Histogram metrics now have a built-in `time()` method for collecting
+  observations on the duration of an expression.
+
+* The built-in `process_cpu_seconds_total` metric is now correctly reported as
+  a Counter instead of a Gauge. This fixes an inconsistency with other
+  Prometheus clients that would prevent metrics being used with Pushgateway.
+
 # openmetrics 0.1.1
 
 * Fixes inaccurate CPU usage when using `register_default_metrics()`.
