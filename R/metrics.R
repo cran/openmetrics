@@ -9,7 +9,10 @@
 #'
 #' @param name The name of the metric.
 #' @param help A brief, one-sentence explanation of the metric's meaning.
-#' @param ... Currently ignored.
+#' @param labels A vector of label names for the metric.
+#' @param unit An optional unit for the metric, e.g. \code{"seconds"}. Must
+#'   match the metric name.
+#' @param ... For backward compatibility, otherwise ignored.
 #' @param registry Where to register the metric for later retrieval.
 #'
 #' @return An object with methods to manipulate the metric. See details.
@@ -47,9 +50,9 @@
 #'   Available for histograms.
 #'
 #' @examples
-#' meows <- counter_metric("meows", "Heard around the house.", cat = "Unknown")
+#' meows <- counter_metric("meows", "Heard around the house.", labels = "cat")
 #' meows$inc(cat = "Shamus") # Count one meow from Shamus.
-#' meows$inc(3) # Count three meows of unknown origin.
+#' meows$inc(3, cat = "Unknown") # Count three meows of unknown origin.
 #' meows$render()
 #'
 #' thermostat <- gauge_metric("thermostat", "Thermostat display.")
@@ -59,7 +62,7 @@
 #'
 #' temperature <- histogram_metric(
 #'   "temperature", "Ambient room temperature measurements.",
-#'   buckets = c(10, 15, 20, 22, 25), room = "kitchen"
+#'   buckets = c(10, 15, 20, 22, 25), labels = "room"
 #' )
 #' set.seed(9090)
 #' # Simulate taking ambient temperature samples.
@@ -71,10 +74,16 @@
 #' @seealso The official documentation on [Metric Types](https://prometheus.io/docs/concepts/metric_types/).
 #' @name metrics
 #' @export
-counter_metric <- function(name, help, ..., registry = global_registry()) {
+counter_metric <- function(name, help, labels = character(), ..., unit = NULL,
+                           registry = global_registry()) {
   existing <- registry$metric(name, type = "counter")
   if (is.null(existing)) {
-    Counter$new(name = name, help = help, ..., registry = registry)
+    # Backwards compatibility with passing labels as arguments.
+    labels <- union(labels, names(list(...)))
+    Counter$new(
+      name = name, help = help, labels = labels, unit = unit,
+      registry = registry
+    )
   } else {
     existing
   }
@@ -82,10 +91,16 @@ counter_metric <- function(name, help, ..., registry = global_registry()) {
 
 #' @rdname metrics
 #' @export
-gauge_metric <- function(name, help, ..., registry = global_registry()) {
+gauge_metric <- function(name, help, labels = character(), ..., unit = NULL,
+                         registry = global_registry()) {
   existing <- registry$metric(name, type = "gauge")
   if (is.null(existing)) {
-    Gauge$new(name = name, help = help, ..., registry = registry)
+    # Backwards compatibility with passing labels as arguments.
+    labels <- union(labels, names(list(...)))
+    Gauge$new(
+      name = name, help = help, labels = labels, unit = unit,
+      registry = registry
+    )
   } else {
     existing
   }
@@ -97,11 +112,15 @@ gauge_metric <- function(name, help, ..., registry = global_registry()) {
 #' @rdname metrics
 #' @export
 histogram_metric <- function(name, help, buckets = c(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
-                             ..., registry = global_registry()) {
+                             labels = character(), ..., unit = NULL,
+                             registry = global_registry()) {
   existing <- registry$metric(name, type = "histogram")
   if (is.null(existing)) {
+    # Backwards compatibility with passing labels as arguments.
+    labels <- union(labels, names(list(...)))
     Histogram$new(
-      name = name, help = help, buckets = buckets, ..., registry = registry
+      name = name, help = help, buckets = buckets, labels = labels, unit = unit,
+      registry = registry
     )
   } else {
     existing
@@ -111,24 +130,33 @@ histogram_metric <- function(name, help, buckets = c(0.005, 0.01, 0.025, 0.05, 0
 Metric <- R6::R6Class(
   "Metric",
   public = list(
-    initialize = function(name, help, type = "gauge", ...,
-                          registry = global_registry()) {
+    initialize = function(name, help, type = "gauge", labels = character(),
+                          unit = NULL, registry = global_registry()) {
       if (!grepl("^[a-zA-Z_:][a-zA-Z0-9_:]*$", name)) {
         stop("Invalid metric name: '", name, "'.")
       }
       private$name <- name
-      private$help <- help
+      private$help <- escape_text(help)
       private$type <- type
+      private$unit <- unit
       private$registry <- registry
-      private$labels <- parse_labels(list(...))
+      if (length(labels) > 0) {
+        # This is so we don't have to refactor the NULL checks.
+        private$labels <- labels
+      }
 
       # We only need to check spec validity for label names once.
-      valid <- grepl("^[a-zA-Z_][a-zA-Z0-9_]*$", names(private$labels))
+      valid <- grepl("^[a-zA-Z_][a-zA-Z0-9_]*$", private$labels)
       if (!all(valid)) {
         stop(
           "One or more invalid metric labels: '",
-          paste(names(private$labels)[!valid], collapse = "', '"), "'."
+          paste(private$labels[!valid], collapse = "', '"), "'."
         )
+      }
+
+      if (!is.null(private$unit) &&
+          !grepl(sprintf("_%s$", private$unit), private$name)) {
+        stop("Metric name does not match unit.")
       }
 
       registry$register(name = name, type = type, self)
@@ -140,12 +168,19 @@ Metric <- R6::R6Class(
   ),
   private = list(
     name = NULL, help = NULL, type = NULL, labels = NULL, registry = NULL,
+    unit = NULL,
 
-    header = function(name = private$name) {
-      sprintf(
-        "# HELP %s %s\n# TYPE %s %s", name, private$help, name,
-        private$type
-      )
+    header = function(name = private$name, type = private$type) {
+      if (!is.null(private$unit)) {
+        sprintf(
+          "# HELP %s %s\n# TYPE %s %s\n# UNIT %s %s", name, private$help, name,
+          type, name, private$unit
+        )
+      } else {
+        sprintf(
+          "# HELP %s %s\n# TYPE %s %s", name, private$help, name, type
+        )
+      }
     }
   )
 )
@@ -153,17 +188,21 @@ Metric <- R6::R6Class(
 Counter <- R6::R6Class(
   "Counter", inherit = Metric,
   public = list(
-    initialize = function(name, help, ..., registry = global_registry()) {
+    initialize = function(name, help, labels = character(), unit = NULL,
+                          registry = global_registry()) {
       # Compatibility with OpenMetrics.
       name <- gsub("_total$", "", name)
-      super$initialize(name, help, type = "counter", ..., registry = registry)
+      super$initialize(
+        name, help, type = "counter", labels = labels, unit = unit,
+        registry = registry
+      )
       if (is.null(private$labels)) {
         # Fast version, just a value.
         private$value <- 0
+        private$created <- unclass(Sys.time())
       } else {
         private$value <- new.env(parent = emptyenv())
-        # Initialize the counter for the default labels.
-        private$value[[encode_labels(private$labels)]] <- 0
+        private$created <- new.env(parent = emptyenv())
       }
     },
 
@@ -172,35 +211,58 @@ Counter <- R6::R6Class(
       # _total but help/type text do not. However, some existing tools will
       # barf on this input, notably the Prometheus Pushgateway, so it must be
       # possible to circumvent.
+      #
+      # In addition, when in legacy mode, make _created a separate metric with
+      # no HELP or TYPE info. This is what the Python reference client does.
       if (format == "openmetrics") {
-        name <- private$name
-        fmt <- "%s\n%s_total %s\n"
-        fmt_labels <- "%s_total{%s} %s"
+        header <- private$header()
+        if (is.null(private$labels)) {
+          sprintf(
+            "%s\n%s_total %s\n%s_created %s\n", header, private$name,
+            private$value, private$name, private$created
+          )
+        } else {
+          entries <- vapply(ls(private$value), function(key) {
+            sprintf(
+              "%s_total{%s} %s\n%s_created{%s} %s", private$name, key,
+              private$value[[key]], private$name, key, private$created[[key]]
+            )
+          }, character(1))
+          sprintf("%s\n%s\n", header, paste(entries, collapse = "\n"))
+        }
       } else {
         name <- sprintf("%s_total", private$name)
-        fmt <- "%s\n%s %s\n"
-        fmt_labels <- "%s{%s} %s"
-      }
-      if (is.null(private$labels)) {
-        sprintf(fmt, private$header(name), name, private$value)
-      } else {
-        entries <- vapply(ls(private$value), function(key) {
-          sprintf(fmt_labels, name, key, private$value[[key]])
-        }, character(1))
-        sprintf(
-          "%s\n%s\n", private$header(name), paste(entries, collapse = "\n")
-        )
+        header <- private$header(name = name)
+        if (is.null(private$labels)) {
+          sprintf(
+            "%s\n%s %s\n# TYPE %s_created gauge\n%s_created %s\n", header, name,
+            private$value, name, name, private$created
+          )
+        } else {
+          entries <- vapply(ls(private$value), function(key) {
+            sprintf("%s{%s} %s", name, key, private$value[[key]])
+          }, character(1))
+          created <- vapply(ls(private$created), function(key) {
+            sprintf("%s_created{%s} %s", name, key, private$created[[key]])
+          }, character(1))
+          sprintf(
+            "%s\n%s\n# TYPE %s_created gauge\n%s\n", header,
+            paste(entries, collapse = "\n"), name,
+            paste(created, collapse = "\n")
+          )
+        }
       }
     },
 
     inc = function(by = 1, ...) {
-      stopifnot(by > 0)
+      stopifnot(by >= 0)
       if (is.null(private$labels)) {
         private$value <- private$value + by
       } else {
-        key <- encode_labels(merge_labels(list(...), private$labels))
+        key <- encode_labels(validate_labels(list(...), private$labels))
         value <- private$value[[key]]
         if (is.null(value)) {
+          private$created[[key]] <- unclass(Sys.time())
           private$value[[key]] <- by
         } else {
           private$value[[key]] <- value + by
@@ -212,27 +274,30 @@ Counter <- R6::R6Class(
       if (is.null(private$labels)) {
         private$value <- 0
       } else {
+        private$created <- new.env(parent = emptyenv())
         private$value <- new.env(parent = emptyenv())
-        private$value[[encode_labels(private$labels)]] <- 0
       }
     }
   ),
   private = list(
-    value = NULL
+    value = NULL, created = NULL
   )
 )
 
 Gauge <- R6::R6Class(
   "Gauge", inherit = Metric,
   public = list(
-    initialize = function(name, help, ..., registry = global_registry()) {
-      super$initialize(name, help, type = "gauge", ..., registry = registry)
+    initialize = function(name, help, labels = character(), unit = NULL,
+                          registry = global_registry()) {
+      super$initialize(
+        name, help, type = "gauge", labels = labels, unit = unit,
+        registry = registry
+      )
       if (is.null(private$labels)) {
         # Fast version, just a value.
         private$value <- 0
       } else {
         private$value <- new.env(parent = emptyenv())
-        private$value[[encode_labels(private$labels)]] <- 0
       }
     },
 
@@ -255,7 +320,7 @@ Gauge <- R6::R6Class(
       if (is.null(private$labels)) {
         private$value <- private$value + by
       } else {
-        key <- encode_labels(merge_labels(list(...), private$labels))
+        key <- encode_labels(validate_labels(list(...), private$labels))
         value <- private$value[[key]]
         if (is.null(value)) {
           private$value[[key]] <- by
@@ -269,7 +334,7 @@ Gauge <- R6::R6Class(
       if (is.null(private$labels)) {
         private$value <- private$value - by
       } else {
-        key <- encode_labels(merge_labels(list(...), private$labels))
+        key <- encode_labels(validate_labels(list(...), private$labels))
         value <- private$value[[key]]
         if (is.null(value)) {
           private$value[[key]] <- -by
@@ -284,7 +349,7 @@ Gauge <- R6::R6Class(
       if (is.null(private$labels)) {
         private$value <- value
       } else {
-        key <- encode_labels(merge_labels(list(...), private$labels))
+        key <- encode_labels(validate_labels(list(...), private$labels))
         private$value[[key]] <- value
       }
     },
@@ -298,7 +363,6 @@ Gauge <- R6::R6Class(
         private$value <- 0
       } else {
         private$value <- new.env(parent = emptyenv())
-        private$value[[encode_labels(private$labels)]] <- 0
       }
     }
   ),
@@ -311,8 +375,12 @@ Histogram <- R6::R6Class(
   "Histogram", inherit = Metric,
   public = list(
     initialize = function(name, help, buckets = c(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
-                          ..., registry = global_registry()) {
-      super$initialize(name, help, type = "histogram", ..., registry = registry)
+                          labels = character(), unit = NULL,
+                          registry = global_registry()) {
+      super$initialize(
+        name, help, type = "histogram", labels = labels, unit = unit,
+        registry = registry
+      )
       buckets <- sort(buckets)
       private$buckets <- c(buckets, Inf)
       # Note: Buckets without a .0 seem to need them to satisfy the parser, but
@@ -322,6 +390,11 @@ Histogram <- R6::R6Class(
       buckets_str[!have_digits] <- sprintf("%.1f", buckets[!have_digits])
       private$le <- c(buckets_str, "+Inf")
       self$reset()
+      if (is.null(private$labels)) {
+        private$created <- unclass(Sys.time())
+      } else {
+        private$created <- new.env(parent = emptyenv())
+      }
     },
 
     render = function(format = "openmetrics") {
@@ -331,15 +404,35 @@ Histogram <- R6::R6Class(
         )
         sums <- sprintf("%s_sum %s", private$name, private$sum)
         count <- sprintf("%s_count %s", private$name, private$count)
-        sprintf(
-          "%s\n%s\n", private$header(),
-          paste(c(buckets, sums, count), collapse = "\n")
-        )
+        created <- sprintf("%s_created %s", private$name, private$created)
+        if (format == "openmetrics") {
+          sprintf(
+            "%s\n%s\n", private$header(),
+            paste(c(buckets, sums, count, created), collapse = "\n")
+          )
+        } else {
+          created_type <- sprintf("#TYPE %s_created gauge", private$name)
+          sprintf(
+            "%s\n%s\n", private$header(), paste(
+              c(buckets, sums, count, created_type, created), collapse = "\n"
+            )
+          )
+        }
       } else {
         # Matching labels need to be printed together to satisfy the OpenMetrics
         # parser.
         keys <- ls(private$dist)
+        if (length(keys) == 0) {
+          return("")
+        }
         blocks <- character(length(keys))
+        # For legacy formatting, keep _created under its own metric.
+        if (format == "openmetrics") {
+          cblocks <- character()
+        } else {
+          cblocks <- character(length(keys) + 1)
+          cblocks[1] <- sprintf("# TYPE %s_created gauge", private$name)
+        }
         for (i in 1:length(keys)) {
           key <- keys[i]
           buckets <- paste0(
@@ -350,10 +443,22 @@ Histogram <- R6::R6Class(
           count <- sprintf(
             "%s_count{%s} %s", private$name, key, private$count[[key]]
           )
-          blocks[i] <- paste(c(buckets, sums, count), collapse = "\n")
+
+          if (format == "openmetrics") {
+            created <- sprintf(
+              "%s_created{%s} %s", private$name, key, private$created[[key]]
+            )
+            blocks[i] <- paste(c(buckets, sums, count, created), collapse = "\n")
+          } else {
+            blocks[i] <- paste(c(buckets, sums, count), collapse = "\n")
+            cblocks[i + 1] <- sprintf(
+              "%s_created{%s} %s", private$name, key, private$created[[key]]
+            )
+          }
         }
         sprintf(
-          "%s\n%s\n", private$header(), paste(blocks, collapse = "\n")
+          "%s\n%s\n", private$header(),
+          paste(c(blocks, cblocks), collapse = "\n")
         )
       }
     },
@@ -368,10 +473,11 @@ Histogram <- R6::R6Class(
         private$count <- private$count + 1
         private$sum <- private$sum + value
       } else {
-        key <- encode_labels(merge_labels(list(...), private$labels))
+        key <- encode_labels(validate_labels(list(...), private$labels))
         current <- private$dist[[key]]
         # We know that if one entry is missing they all are.
         if (is.null(current)) {
+          private$created[[key]] <- unclass(Sys.time())
           private$dist[[key]] <- dist
           private$count[[key]] <- 1
           private$sum[[key]] <- value
@@ -400,15 +506,12 @@ Histogram <- R6::R6Class(
         private$dist <- new.env(parent = emptyenv())
         private$sum <- new.env(parent = emptyenv())
         private$count <- new.env(parent = emptyenv())
-        key <- encode_labels(private$labels)
-        private$sum[[key]] <- 0
-        private$count[[key]] <- 0
-        private$dist[[key]] <- rep(0, times = length(private$buckets))
       }
     }
   ),
   private = list(
-    buckets = numeric(), le = character(), dist = NULL, sum = NULL, count = NULL
+    buckets = numeric(), le = character(), dist = NULL, sum = NULL,
+    count = NULL, created = NULL
   )
 )
 
@@ -428,15 +531,27 @@ parse_labels <- function(labels) {
   labels
 }
 
-merge_labels <- function(labels, defaults) {
-  if (length(labels) == 0) {
-    defaults
-  } else {
-    out <- utils::modifyList(defaults, parse_labels(labels))
-    out[names(out) %in% names(defaults)]
+validate_labels <- function(labels, available) {
+  labels <- parse_labels(labels)
+  present <- available %in% names(labels)
+  if (!all(present)) {
+    missing <- paste0(available[!present], collapse = "', '")
+    stop("One or more missing metric labels: '", missing,  "'.")
   }
+  # TODO: Is it wrong to silently drop additional labels?
+  labels[names(labels) %in% available]
 }
 
 encode_labels <- function(labels) {
-  paste0(names(labels), "=\"", labels, "\"", collapse = ",")
+  paste0(names(labels), "=\"", escape_text(labels), "\"", collapse = ",")
 }
+
+escape_text <- function(text) {
+  text <- gsub("\\", "\\\\", text, fixed = TRUE)
+  text <- gsub("\n", "\\n", text, fixed = TRUE)
+  text <- gsub("\"", "\\\"", text, fixed = TRUE)
+  text
+}
+
+.content_type <- "application/openmetrics-text;version=0.0.1;charset=utf-8"
+.legacy_content_type <- "text/plain;version=0.0.4;charset=utf-8"

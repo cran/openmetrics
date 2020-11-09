@@ -1,6 +1,6 @@
 Package: openmetrics
 Title: A 'Prometheus' Client for R Using the 'OpenMetrics' Format
-Version: 0.2.0
+Version: 0.3.0
 Authors@R: c(
   person("Aaron", "Jacobs", role = c("aut", "cre"),
          email = "atheriel@gmail.com"),
@@ -18,11 +18,11 @@ Imports: R6
 Suggests: httr, plumber, shiny, testthat (>= 2.1.0)
 Encoding: UTF-8
 LazyData: true
-RoxygenNote: 7.1.0
+RoxygenNote: 7.1.1
 NeedsCompilation: no
-Packaged: 2020-07-14 00:10:56 UTC; aaronj
+Packaged: 2020-11-09 20:46:46 UTC; aaronj
 Author: Aaron Jacobs [aut, cre],
   Crescendo Technology Ltd. [cph]
 Maintainer: Aaron Jacobs <atheriel@gmail.com>
 Repository: CRAN
-Date/Publication: 2020-07-14 08:00:03 UTC
+Date/Publication: 2020-11-09 21:20:02 UTC

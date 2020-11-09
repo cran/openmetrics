@@ -1,3 +1,43 @@
+# openmetrics 0.3.0
+
+## Breaking Changes
+
+* Label names should now be passed as the `labels` parameter when creating a
+  metric, instead of being inferred from the remaining named arguments. For
+  consistency with other clients, there is no longer a notion of a "default"
+  label value. This also makes it possible to have labels like `name`, `help`,
+  `type`, and so on that conflict with existing parameter names.
+
+* Relatedly, all labels must now be specified when calling methods on a metric
+  (such as `inc()` or `set()`), since there is no default to fall back on.
+
+## Other Improvements
+
+* The package now has its own hex logo.
+
+* Only generate the OpenMetrics format when the (preliminary) OpenMetrics
+  content-type is passed in the `Accept` header. Otherwise, fall back on the
+  Prometheus format and content-type (#3).
+
+* Pushgateway functions will now `stop()` for HTTP errors instead of merely
+  issuing a warning. Clients that can tolerate these errors will likely
+  `tryCatch()` them anyway, since `httr::RETRY()` can fail for other reasons.
+
+* Requests made to Shiny apps that return HTTP 401 will no longer include the
+  rendered metrics anyway.
+
+* The `"`, `\n`, and `\` characters are now escaped in labels and help text, as
+  in the OpenMetrics reference implementation (#1).
+
+* Counter metrics can now be incremented by zero.
+
+* Counter, Gauge, and Histogram metrics can now take an optional `unit`
+  parameter. The provided unit *must* match the one in the name of the metric
+  itself -- e.g. a `received_bytes` metric must have unit "bytes" (#2).
+
+* Counters and Histograms now have a `_created` child metric, as per the
+  OpenMetrics draft specification (#2).
+
 # openmetrics 0.2.0
 
 * Add `push_to_gateway()` and `delete_from_gateway()` for manually pushing

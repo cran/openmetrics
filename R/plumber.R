@@ -25,7 +25,7 @@
 #' }
 #' @export
 register_plumber_metrics <- function(app, registry = global_registry()) {
-  stopifnot(inherits(app, "plumber"))
+  stopifnot(inherits(app, c("plumber", "Plumber")))
 
   # Define two simple metrics. The most common conventions seem to be:
   #
@@ -41,14 +41,14 @@ register_plumber_metrics <- function(app, registry = global_registry()) {
   # * https://www.npmjs.com/package/prometheus-api-metrics
   # * https://github.com/tdeekens/promster
   requests <- counter_metric(
-    "http_request", "Running total of HTTP requests.", path = "/",
-    method = "GET", status = "200", registry = registry
+    "http_request", "Running total of HTTP requests.",
+    labels = c("path", "method", "status"), registry = registry
   )
   duration <- histogram_metric(
     "http_request_duration_seconds", "Duration of HTTP requests, in seconds.",
     # These are what node.js's prom-client uses.
     buckets = c(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
-    path = "/", method = "GET", status = "200", registry = registry
+    labels = c("path", "method", "status"), registry = registry
   )
 
   preroute_hook <- function(req, res) {
@@ -85,10 +85,17 @@ register_plumber_metrics <- function(app, registry = global_registry()) {
       res$body <- "Unauthorized"
       return(res)
     }
-
-    res$setHeader("Content-Type", "text/plain;version=0.0.4")
     res$status <- 200L
-    res$body <- registry$render_all()
+
+    if (!is.null(req$HTTP_ACCEPT) &&
+        grepl("application/openmetrics-text", req$HTTP_ACCEPT, fixed = TRUE)) {
+      res$setHeader("Content-Type", .content_type)
+      res$body <- registry$render_all()
+    } else {
+      res$setHeader("Content-Type", .legacy_content_type)
+      res$body <- registry$render_all(format = "legacy")
+    }
+
     res
   })
 

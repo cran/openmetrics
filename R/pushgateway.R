@@ -36,14 +36,16 @@ push_to_gateway <- function(url, job, instance = NA,
   path <- sprintf(
     "/metrics/%s", paste(names(labels), labels, sep = "/", collapse = "/")
   )
-  rendered <- registry$render_all(format = "pushgateway")
+  rendered <- registry$render_all(format = "legacy")
   response <- httr::RETRY(
     "POST", url, path = path, body = rendered, encode = "form",
+    # Pushgateway does not support the OpenMetrics format.
+    config = httr::content_type(.legacy_content_type),
     # Pushgateway will send a 400 if the metric conflicts with an existing one,
     # in which case we don't want to retry (since it will always fail).
     terminate_on = 400
   )
-  httr::warn_for_status(response)
+  httr::stop_for_status(response)
   invisible(NULL)
 }
 
@@ -55,7 +57,7 @@ delete_from_gateway <- function(url, job, instance = NA, ...) {
     "/metrics/%s", paste(names(labels), labels, sep = "/", collapse = "/")
   )
   response <- httr::RETRY("DELETE", url, path = path)
-  httr::warn_for_status(response)
+  httr::stop_for_status(response)
   invisible(NULL)
 }
 
